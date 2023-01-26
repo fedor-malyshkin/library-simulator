@@ -1,0 +1,12 @@
+log:
+  path: "/tmp/123"
+http:
+  ip: 127.0.0.1
+  port: 5000
+kafka:
+  requestTopic: receptionist-req
+  responseTopic: receptionist-resp
+  brokers:
+    - "localhost:9092"
+    - "localhost:9093"
+    - "localhost:9094"

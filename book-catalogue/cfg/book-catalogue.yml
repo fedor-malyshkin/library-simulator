@@ -1,0 +1,11 @@
+log:
+  path: "/tmp/123"
+bookArchive:
+  ip: 127.0.0.1
+  port: 5001
+kafka:
+  requestTopic: receptionist-req
+  responseTopic: receptionist-resp
+  brokers:
+    - "localhost:9092"
+    - "localhost:9093"

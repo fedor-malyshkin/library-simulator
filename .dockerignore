@@ -1,0 +1,11 @@
+.idea
+*.swp
+build
+tmp
+temp
+docker
+*mock.go
+pkg/_mocks
+*.log
+*.out
+

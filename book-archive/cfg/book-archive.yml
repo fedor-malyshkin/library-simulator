@@ -1,0 +1,10 @@
+log:
+  path: "/tmp/123"
+http:
+  ip: 127.0.0.1
+  port: 5001
+db:
+  user: pg-user
+  password: pg-password
+  host: localhost
+  database: postgres

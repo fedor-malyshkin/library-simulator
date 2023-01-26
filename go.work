@@ -1,0 +1,9 @@
+go 1.19
+
+use (
+	book-archive
+	book-catalogue
+	common
+	receptionist
+	visitor
+)
