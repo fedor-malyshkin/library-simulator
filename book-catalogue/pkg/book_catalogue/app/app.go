@@ -2,62 +2,62 @@ package app
 
 import (
 	"context"
+	"errors"
 	"github.com/fedor-malyshkin/library-simulator/book-catalogue/pkg/book_catalogue"
 	"github.com/fedor-malyshkin/library-simulator/book-catalogue/pkg/book_catalogue/config"
 	"github.com/fedor-malyshkin/library-simulator/book-catalogue/pkg/book_catalogue/service"
 	"github.com/fedor-malyshkin/library-simulator/common/pkg/svclog"
+	"github.com/hashicorp/go-multierror"
 	"github.com/rs/zerolog"
-	"golang.org/x/sync/errgroup"
 )
 
 // App is the main application object, containing all services and endpoints
 type App struct {
 	log    zerolog.Logger
-	appCtx *book_catalogue.Context
+	appCtx *book_catalogue.AppContext
 	cfg    *config.Config
-	cancel context.CancelFunc
 }
 
-func (a App) Run() error {
+func (a App) StartApp() error {
 	a.log.Info().Str("version", "1.0").Msg("starting SVC")
 
-	// TODO: study context
-	_, cancel := context.WithCancel(context.Background())
-	a.cancel = cancel
+	err := a.appCtx.ErrGroup.Wait()
+	errs := multierror.Append(a.appCtx.Errors, err)
+	return filterOutCancelErr(errs).ErrorOrNil()
+}
 
-	// TODO: study package
-	var eg errgroup.Group
-
-	// TODO: how to close kafka readers/writers properly on shutdown (graceful shutdown)?
-	eg.Go(func() error {
-		for {
+func filterOutCancelErr(ers *multierror.Error) *multierror.Error {
+	var res error
+	for _, e := range ers.WrappedErrors() {
+		if errors.Is(e, context.Canceled) {
+			continue
 		}
-	})
-
-	// TODO: study mutexes
-	return eg.Wait()
+		res = multierror.Append(res, e)
+	}
+	return multierror.Append(res, nil)
 }
 
 // NewApp creates a new application object based on passed configuration
 func NewApp(cfg *config.Config) (*App, error) {
-	appCtx := &book_catalogue.Context{
-		Logger: svclog.NewLogger(),
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	appCtx := book_catalogue.NewAppContext(svclog.NewLogger(), ctx, cancel)
 
 	kafkaReqCh := make(chan service.KafkaMsg, 100)
 	kafkaRespCh := make(chan service.KafkaMsg, 100)
 
 	enqHnd := service.NewEnquiryHandler(cfg, appCtx, kafkaReqCh, kafkaRespCh)
-	enqHnd.Run()
+	appCtx.ErrGroup.Go(enqHnd.MainLoop)
 
 	kafkaEnquiryProducer := service.NewKafkaEnquiryProducer(cfg, appCtx, kafkaRespCh)
-	kafkaEnquiryProducer.Run()
+	appCtx.ErrGroup.Go(kafkaEnquiryProducer.MainLoop)
+
 	kafkaEnquiryConsumer := service.NewKafkaEnquiryConsumer(cfg, appCtx, kafkaReqCh)
-	kafkaEnquiryConsumer.Run()
+	appCtx.ErrGroup.Go(kafkaEnquiryConsumer.MainLoop)
 
 	return &App{
+		log:    svclog.Service(appCtx.Logger, "book-catalogue"),
 		appCtx: appCtx,
 		cfg:    cfg,
-		log:    svclog.Service(appCtx.Logger, "book-catalogue"),
 	}, nil
 }

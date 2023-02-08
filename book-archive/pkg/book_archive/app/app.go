@@ -7,46 +7,35 @@ import (
 	"github.com/fedor-malyshkin/library-simulator/book-archive/pkg/book_archive/rest"
 	"github.com/fedor-malyshkin/library-simulator/book-archive/pkg/book_archive/service"
 	"github.com/fedor-malyshkin/library-simulator/common/pkg/svclog"
+	"github.com/hashicorp/go-multierror"
 	"github.com/rs/zerolog"
-	"golang.org/x/sync/errgroup"
 )
 
 // App is the main application object, containing all services and endpoints
 type App struct {
-	ctx       context.Context
-	ctxCancel context.CancelFunc
-	log       zerolog.Logger
-	appCtx    *book_archive.Context
-	cfg       *config.Config
-	routes    *rest.MainEndpoint
-	cancel    context.CancelFunc
+	appCtx *book_archive.AppContext
+	log    zerolog.Logger
+	cfg    *config.Config
+	routes *rest.MainEndpoint
 }
 
 func (a App) Run() error {
 	a.log.Info().Str("version", "1.0").Msg("starting SVC")
 
-	// TODO: study package
-	var eg errgroup.Group
+	a.appCtx.ErrGroup.Go(a.routes.ListenAndServe)
+	a.appCtx.ErrGroup.Go(a.routes.ShutdownListenerLoop)
 
-	// TODO: how to close kafka readers/writers properly on shutdown (graceful shutdown)?
-	eg.Go(func() error {
-		return a.routes.Run(a.ctx)
-	})
-
-	// TODO: study mutexes
-	return eg.Wait()
+	err := a.appCtx.ErrGroup.Wait()
+	return multierror.Append(a.appCtx.Errors, err).ErrorOrNil()
 }
 
 // NewApp creates a new application object based on passed configuration
 func NewApp(cfg *config.Config) (*App, error) {
-	appCtx := &book_archive.Context{
-		Logger: svclog.NewLogger(),
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
+	appCtx := book_archive.NewAppContext(svclog.NewLogger(), ctx, cancel)
 
 	dbHnd := service.NewDBHandler(cfg, appCtx)
-	dbHnd.Run(ctx)
+	appCtx.ErrGroup.Go(dbHnd.MainLoop)
 	enqHnd := service.NewEnquiryHandler(cfg, appCtx, dbHnd)
 
 	ep, err := rest.NewMainEndpoint(cfg, appCtx, enqHnd)
@@ -55,11 +44,9 @@ func NewApp(cfg *config.Config) (*App, error) {
 	}
 
 	return &App{
-		ctx:       ctx,
-		ctxCancel: cancel,
-		appCtx:    appCtx,
-		cfg:       cfg,
-		routes:    ep,
-		log:       svclog.Service(appCtx.Logger, "book-archive"),
+		appCtx: appCtx,
+		cfg:    cfg,
+		routes: ep,
+		log:    svclog.Service(appCtx.Logger, "book-archive"),
 	}, nil
 }

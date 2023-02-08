@@ -19,7 +19,7 @@ type EnquiryHandler struct {
 }
 
 func NewEnquiryHandler(cfg *config.Config,
-	appCtx *book_archive.Context,
+	appCtx *book_archive.AppContext,
 	dbHnd *Handler) *EnquiryHandler {
 
 	return &EnquiryHandler{
@@ -76,6 +76,7 @@ func (h EnquiryHandler) queryGitHub(query string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err

@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -18,6 +17,7 @@ import (
 )
 
 type Handler struct {
+	appCtx  *book_archive.AppContext
 	log     zerolog.Logger
 	db      *sqlx.DB
 	cacheCh chan CacheRec
@@ -32,7 +32,7 @@ type CacheRec struct {
 const appMigVer = 1
 
 func NewDBHandler(cfg *config.Config,
-	appCtx *book_archive.Context) *Handler {
+	appCtx *book_archive.AppContext) *Handler {
 
 	cnStr := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable", cfg.DB.User, cfg.DB.Password,
 		cfg.DB.Host, cfg.DB.Database)
@@ -40,13 +40,14 @@ func NewDBHandler(cfg *config.Config,
 	migrateDB(cnStr, appCtx)
 
 	return &Handler{
+		appCtx:  appCtx,
 		log:     svclog.Service(appCtx.Logger, "db-handler"),
 		db:      db,
 		cacheCh: make(chan CacheRec, 100),
 	}
 }
 
-func migrateDB(cnStr string, appCtx *book_archive.Context) {
+func migrateDB(cnStr string, appCtx *book_archive.AppContext) {
 	m, err := migrate.New("file:./migrations", cnStr)
 	if err != nil {
 		appCtx.Logger.Fatal().Err(err).Msg("cannot configure DB migrations")
@@ -69,7 +70,7 @@ func migrateDB(cnStr string, appCtx *book_archive.Context) {
 	}
 }
 
-func createDB(cfg *config.Config, appCtx *book_archive.Context, cnStr string) *sqlx.DB {
+func createDB(cfg *config.Config, appCtx *book_archive.AppContext, cnStr string) *sqlx.DB {
 	db, err := sqlx.Connect("pgx", cnStr)
 	if err != nil {
 		appCtx.Logger.Fatal().Err(err).Msg("cannot connect to DB")
@@ -77,19 +78,18 @@ func createDB(cfg *config.Config, appCtx *book_archive.Context, cnStr string) *s
 	return db
 }
 
-func (h *Handler) Run(ctx context.Context) {
-	// TODO: how to finish this infinite goroutine?
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				h.log.Info().Msg("end run-loop")
-				return
-			case q := <-h.cacheCh:
+func (h *Handler) MainLoop() error {
+	for {
+		select {
+		case <-h.appCtx.Ctx.Done():
+			h.log.Info().Err(h.appCtx.Ctx.Err()).Msg("stop db cache writing loop")
+			return h.appCtx.Ctx.Err()
+		case q, ok := <-h.cacheCh:
+			if ok {
 				h.storeToCache(q)
 			}
 		}
-	}()
+	}
 }
 
 func (h *Handler) storeToCache(cr CacheRec) {

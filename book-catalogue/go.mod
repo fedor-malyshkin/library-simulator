@@ -4,6 +4,7 @@ go 1.19
 
 require (
 	github.com/fedor-malyshkin/library-simulator/common v0.0.0-20230128132035-e0cb45f1fd66
+	github.com/hashicorp/go-multierror v1.1.1
 	github.com/rs/zerolog v1.29.0
 	github.com/segmentio/kafka-go v0.4.38
 	github.com/spf13/cobra v1.6.1
@@ -13,6 +14,7 @@ require (
 
 require (
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
+	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/inconshreveable/mousetrap v1.0.1 // indirect
 	github.com/klauspost/compress v1.15.9 // indirect

@@ -31,6 +31,7 @@ type EnquiryResp struct {
 }
 
 type EnquiryHandler struct {
+	appCtx           *receptionist.AppContext
 	log              zerolog.Logger
 	reqMap           map[EnquiryID]chan<- EnquiryResp
 	enqReqCh         chan EnquiryReq
@@ -40,11 +41,12 @@ type EnquiryHandler struct {
 }
 
 func NewEnquiryHandler(cfg *config.Config,
-	appCtx *receptionist.Context,
+	appCtx *receptionist.AppContext,
 	kafkaReqCh chan KafkaMsg,
 	kafkaCancelReqCh chan EnquiryID,
 	kafkaRespCh chan KafkaMsg) *EnquiryHandler {
 	return &EnquiryHandler{
+		appCtx:           appCtx,
 		log:              svclog.Service(appCtx.Logger, "enquiry-handler"),
 		reqMap:           make(map[EnquiryID]chan<- EnquiryResp, 100),
 		enqReqCh:         make(chan EnquiryReq, 100),
@@ -55,9 +57,10 @@ func NewEnquiryHandler(cfg *config.Config,
 }
 
 func (h EnquiryHandler) ProcessEnquiry(ctx context.Context, request *http.Request) (int, string) {
-	rc := request.Body
+	bd := request.Body
+	defer bd.Close()
 	buf := new(strings.Builder)
-	_, err := io.Copy(buf, rc)
+	_, err := io.Copy(buf, bd)
 	if err != nil {
 		h.log.Err(err)
 		return http.StatusBadRequest, ""
@@ -67,6 +70,7 @@ func (h EnquiryHandler) ProcessEnquiry(ctx context.Context, request *http.Reques
 	respCh := make(chan EnquiryResp)
 	enqID := EnquiryID(uuid.New().String())
 	h.SendEnquiry(enqID, buf.String(), respCh)
+
 	select {
 	case <-ctx.Done():
 		h.kafkaCancelReqCh <- enqID
@@ -87,35 +91,35 @@ func (h EnquiryHandler) SendEnquiry(id EnquiryID, content string, ch chan Enquir
 	}
 }
 
-func (h EnquiryHandler) Run() {
-	// TODO: how to finish this infinite goroutine?
-	go func() {
-		for {
-			select {
-			case enqID := <-h.kafkaCancelReqCh:
-				if ch, ok := h.reqMap[enqID]; ok {
-					close(ch)
+func (h EnquiryHandler) MainLoop() error {
+	for {
+		select {
+		case <-h.appCtx.Ctx.Done():
+			h.log.Info().Err(h.appCtx.Ctx.Err()).Msg("stop request processing loop")
+			return h.appCtx.Ctx.Err()
+		case enqID := <-h.kafkaCancelReqCh:
+			if ch, ok := h.reqMap[enqID]; ok {
+				close(ch)
+			}
+			delete(h.reqMap, enqID)
+		case enqReq := <-h.enqReqCh:
+			h.reqMap[enqReq.id] = enqReq.respCh
+			h.log.Info().Str("EnquiryID", enqReq.id.Str()).Msg("put ID into map")
+			h.kafkaReqCh <- KafkaMsg{
+				Key:   enqReq.id.Str(),
+				Value: enqReq.request,
+			}
+		case kfkResp := <-h.kafkaRespCh:
+			enqID := EnquiryID(kfkResp.Key)
+			if ch, ok := h.reqMap[enqID]; ok {
+				ch <- EnquiryResp{
+					id:       enqID,
+					response: kfkResp.Value,
 				}
 				delete(h.reqMap, enqID)
-			case enqReq := <-h.enqReqCh:
-				h.reqMap[enqReq.id] = enqReq.respCh
-				h.log.Info().Str("EnquiryID", enqReq.id.Str()).Msg("put ID into map")
-				h.kafkaReqCh <- KafkaMsg{
-					Key:   enqReq.id.Str(),
-					Value: enqReq.request,
-				}
-			case kfkResp := <-h.kafkaRespCh:
-				enqID := EnquiryID(kfkResp.Key)
-				if ch, ok := h.reqMap[enqID]; ok {
-					ch <- EnquiryResp{
-						id:       enqID,
-						response: kfkResp.Value,
-					}
-					delete(h.reqMap, enqID)
-				} else {
-					h.log.Info().Str("EnquiryID", enqID.Str()).Msg("unknown message ID (probably time-outed)")
-				}
+			} else {
+				h.log.Info().Str("EnquiryID", enqID.Str()).Msg("unknown message ID (probably time-outed)")
 			}
 		}
-	}()
+	}
 }

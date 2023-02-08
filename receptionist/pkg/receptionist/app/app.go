@@ -7,54 +7,44 @@ import (
 	"github.com/fedor-malyshkin/library-simulator/receptionist/pkg/receptionist/config"
 	"github.com/fedor-malyshkin/library-simulator/receptionist/pkg/receptionist/rest"
 	"github.com/fedor-malyshkin/library-simulator/receptionist/pkg/receptionist/service"
+	"github.com/hashicorp/go-multierror"
 	"github.com/rs/zerolog"
-	"golang.org/x/sync/errgroup"
 )
 
 // App is the main application object, containing all services and endpoints
 type App struct {
 	log    zerolog.Logger
-	appCtx *receptionist.Context
+	appCtx *receptionist.AppContext
 	cfg    *config.Config
 	routes *rest.MainEndpoint
-	cancel context.CancelFunc
 }
 
-func (a App) Run() error {
+func (a App) StartApp() error {
 	a.log.Info().Str("version", "1.0").Msg("starting SVC")
 
-	// TODO: study context
-	ctx, cancel := context.WithCancel(context.Background())
-	a.cancel = cancel
+	a.appCtx.ErrGroup.Go(a.routes.ListenAndServe)
+	a.appCtx.ErrGroup.Go(a.routes.ShutdownListenerLoop)
 
-	// TODO: study package
-	var eg errgroup.Group
-
-	// TODO: how to close kafka readers/writers properly on shutdown (graceful shutdown)?
-	eg.Go(func() error {
-		return a.routes.Run(ctx)
-	})
-
-	// TODO: study mutexes
-	return eg.Wait()
+	err := a.appCtx.ErrGroup.Wait()
+	return multierror.Append(a.appCtx.Errors, err).ErrorOrNil()
 }
 
 // NewApp creates a new application object based on passed configuration
 func NewApp(cfg *config.Config) (*App, error) {
-	appCtx := &receptionist.Context{
-		Logger: svclog.NewLogger(),
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	appCtx := receptionist.NewAppContext(svclog.NewLogger(), ctx, cancel)
 
 	kafkaRespCh := make(chan service.KafkaMsg, 100)
 	kafkaCancelReqCh := make(chan service.EnquiryID, 100)
 	kafkaReqCh := make(chan service.KafkaMsg, 100)
 
 	enquiryHandler := service.NewEnquiryHandler(cfg, appCtx, kafkaReqCh, kafkaCancelReqCh, kafkaRespCh)
-	enquiryHandler.Run()
+	appCtx.ErrGroup.Go(enquiryHandler.MainLoop)
 	kafkaEnquiryProducer := service.NewKafkaEnquiryProducer(cfg, appCtx, kafkaReqCh)
-	kafkaEnquiryProducer.Run()
+	appCtx.ErrGroup.Go(kafkaEnquiryProducer.MainLoop)
 	kafkaEnquiryConsumer := service.NewKafkaEnquiryConsumer(cfg, appCtx, kafkaRespCh)
-	kafkaEnquiryConsumer.Run()
+	appCtx.ErrGroup.Go(kafkaEnquiryConsumer.MainLoop)
 
 	ep, err := rest.NewMainEndpoint(cfg, appCtx, enquiryHandler)
 	if err != nil {
@@ -62,9 +52,9 @@ func NewApp(cfg *config.Config) (*App, error) {
 	}
 
 	return &App{
+		log:    svclog.Service(appCtx.Logger, "receptionist"),
 		appCtx: appCtx,
 		cfg:    cfg,
-		log:    svclog.Service(appCtx.Logger, "receptionist"),
 		routes: ep,
 	}, nil
 }

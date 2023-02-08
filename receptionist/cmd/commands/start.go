@@ -19,10 +19,10 @@ var startCmd = &cobra.Command{
 
 		app, err := app.NewApp(cfg)
 		if err != nil {
-			log.Fatal().Err(err).Msg("!!! failed to start Server !!!")
+			log.Fatal().Err(err).Msg("!!! failed to init Server !!!")
 			return err
 		}
 
-		return app.Run()
+		return app.StartApp()
 	},
 }

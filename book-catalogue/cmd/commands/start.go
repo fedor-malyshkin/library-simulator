@@ -23,6 +23,6 @@ var startCmd = &cobra.Command{
 			return err
 		}
 
-		return app.Run()
+		return app.StartApp()
 	},
 }

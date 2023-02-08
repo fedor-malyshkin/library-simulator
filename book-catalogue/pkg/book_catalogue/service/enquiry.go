@@ -11,9 +11,11 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type EnquiryHandler struct {
+	appCtx      *book_catalogue.AppContext
 	cfg         *config.Config
 	log         zerolog.Logger
 	kafkaReqCh  <-chan KafkaMsg
@@ -21,11 +23,12 @@ type EnquiryHandler struct {
 }
 
 func NewEnquiryHandler(cfg *config.Config,
-	appCtx *book_catalogue.Context,
+	appCtx *book_catalogue.AppContext,
 	kafkaReqCh <-chan KafkaMsg,
 	kafkaRespCh chan<- KafkaMsg) *EnquiryHandler {
 
 	return &EnquiryHandler{
+		appCtx:      appCtx,
 		cfg:         cfg,
 		log:         svclog.Service(appCtx.Logger, "enquiry-handler"),
 		kafkaRespCh: kafkaRespCh,
@@ -33,21 +36,24 @@ func NewEnquiryHandler(cfg *config.Config,
 	}
 }
 
-func (h EnquiryHandler) Run() {
-	go func() {
-		for {
-			enq := <-h.kafkaReqCh
+func (h EnquiryHandler) MainLoop() error {
+	for {
+		select {
+		case <-h.appCtx.Ctx.Done():
+			h.log.Info().Err(h.appCtx.Ctx.Err()).Msg("stop enquiry processing loop")
+			return h.appCtx.Ctx.Err()
+		case enq := <-h.kafkaReqCh:
 			var resp string
 			if len(enq.Value) < 20 {
 				var err error
-				// ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-				ctx, cancel := context.WithCancel(context.Background())
+				ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 				resp, err = h.askBookArchive(ctx, enq.Value)
+				cancel()
 				if err != nil {
 					h.log.Err(err).Msg("asking book-archive")
 					continue
 				}
-				cancel()
+
 			} else {
 				resp = strings.Replace(enq.Value, "a", "z", -1)
 			}
@@ -57,7 +63,7 @@ func (h EnquiryHandler) Run() {
 				Value: resp,
 			}
 		}
-	}()
+	}
 }
 
 func (h EnquiryHandler) askBookArchive(ctx context.Context, q string) (string, error) {
