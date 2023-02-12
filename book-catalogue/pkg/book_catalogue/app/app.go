@@ -43,17 +43,15 @@ func NewApp(cfg *config.Config) (*App, error) {
 
 	appCtx := book_catalogue.NewAppContext(svclog.NewLogger(), ctx, cancel)
 
-	kafkaReqCh := make(chan service.KafkaMsg, 100)
-	kafkaRespCh := make(chan service.KafkaMsg, 100)
+	rabbitReqCh := make(chan service.RabbitMsg, 100)
+	rabbitRespCh := make(chan service.RabbitMsg, 100)
 
-	enqHnd := service.NewEnquiryHandler(cfg, appCtx, kafkaReqCh, kafkaRespCh)
+	enqHnd := service.NewEnquiryHandler(cfg, appCtx, rabbitReqCh, rabbitRespCh)
 	appCtx.ErrGroup.Go(enqHnd.MainLoop)
 
-	kafkaEnquiryProducer := service.NewKafkaEnquiryProducer(cfg, appCtx, kafkaRespCh)
-	appCtx.ErrGroup.Go(kafkaEnquiryProducer.MainLoop)
-
-	kafkaEnquiryConsumer := service.NewKafkaEnquiryConsumer(cfg, appCtx, kafkaReqCh)
-	appCtx.ErrGroup.Go(kafkaEnquiryConsumer.MainLoop)
+	kafkaEnquiryProducer := service.NewRabbitEnquiryProcessor(cfg, appCtx, rabbitReqCh, rabbitRespCh)
+	appCtx.ErrGroup.Go(kafkaEnquiryProducer.MainRequestLoop)
+	appCtx.ErrGroup.Go(kafkaEnquiryProducer.MainResponseLoop)
 
 	return &App{
 		log:    svclog.Service(appCtx.Logger, "book-catalogue"),

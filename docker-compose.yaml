@@ -1,57 +1,66 @@
 version: "3.8"
 
 services:
-  kafka-broker-1:
-    container_name: kafka_broker_1
-    image: bitnami/kafka:3.2.3
+#  kafka-broker-1:
+#    container_name: kafka_broker_1
+#    image: bitnami/kafka:3.2.3
+#    ports:
+#      - "9093:9093"
+#    environment:
+#      #      - BITNAMI_DEBUG=yes
+#      - KAFKA_BROKER_ID=1
+#      - ALLOW_PLAINTEXT_LISTENER=yes
+#      # no zookeeper mode
+#      - KAFKA_ENABLE_KRAFT=yes
+#      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+#      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka-broker-1:9092,2@kafka-broker-2:9092
+#      - KAFKA_KRAFT_CLUSTER_ID=tW3LXZglQBWKFipfvZXIdQ
+#      # access options
+#      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,BROKER:PLAINTEXT,EXTERNAL:PLAINTEXT
+#      - KAFKA_CFG_LISTENERS=BROKER://:9091,CONTROLLER://:9092,EXTERNAL://:9093
+#      - KAFKA_CFG_ADVERTISED_LISTENERS=BROKER://kafka-broker-1:9091,EXTERNAL://localhost:9093
+#      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=BROKER
+#      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+#      # partitions + replication
+#      - KAFKA_CFG_NUM_PARTITIONS=2
+#      - KAFKA_DEFAULT_REPLICATION_FACTOR=2
+#      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+#
+#  kafka-broker-2:
+#    container_name: kafka_broker_2
+#    image: bitnami/kafka:3.2.3
+#    ports:
+#      - "9094:9093"
+#    environment:
+#      - KAFKA_BROKER_ID=2
+#      - ALLOW_PLAINTEXT_LISTENER=yes
+#      # no zookeeper mode
+#      - KAFKA_ENABLE_KRAFT=yes
+#      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+#      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka-broker-1:9092,2@kafka-broker-2:9092
+#      - KAFKA_KRAFT_CLUSTER_ID=tW3LXZglQBWKFipfvZXIdQ
+#      # access options
+#      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,BROKER:PLAINTEXT,EXTERNAL:PLAINTEXT
+#      - KAFKA_CFG_LISTENERS=BROKER://:9091,CONTROLLER://:9092,EXTERNAL://:9093
+#      - KAFKA_CFG_ADVERTISED_LISTENERS=BROKER://kafka-broker-2:9091,EXTERNAL://localhost:9094
+#      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=BROKER
+#      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+#      # partitions + replication
+#      - KAFKA_CFG_NUM_PARTITIONS=2
+#      - KAFKA_DEFAULT_REPLICATION_FACTOR=2
+#      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+  lib-rabbitmq:
+    image: rabbitmq:3.11.8-management
+    hostname: rabbitmq
     ports:
-      - "9093:9093"
+      - 15672:15672
+      - 5672:5672
     environment:
-      #      - BITNAMI_DEBUG=yes
-      - KAFKA_BROKER_ID=1
-      - ALLOW_PLAINTEXT_LISTENER=yes
-      # no zookeeper mode
-      - KAFKA_ENABLE_KRAFT=yes
-      - KAFKA_CFG_PROCESS_ROLES=broker,controller
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka-broker-1:9092,2@kafka-broker-2:9092
-      - KAFKA_KRAFT_CLUSTER_ID=tW3LXZglQBWKFipfvZXIdQ
-      # access options
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,BROKER:PLAINTEXT,EXTERNAL:PLAINTEXT
-      - KAFKA_CFG_LISTENERS=BROKER://:9091,CONTROLLER://:9092,EXTERNAL://:9093
-      - KAFKA_CFG_ADVERTISED_LISTENERS=BROKER://kafka-broker-1:9091,EXTERNAL://localhost:9093
-      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=BROKER
-      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      # partitions + replication
-      - KAFKA_CFG_NUM_PARTITIONS=2
-      - KAFKA_DEFAULT_REPLICATION_FACTOR=2
-      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - RABBITMQ_DEFAULT_USER=rmuser
+      - RABBITMQ_DEFAULT_PASS=rmpassword
+      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit disk_free_limit 2147483648
 
-  kafka-broker-2:
-    container_name: kafka_broker_2
-    image: bitnami/kafka:3.2.3
-    ports:
-      - "9094:9093"
-    environment:
-      - KAFKA_BROKER_ID=2
-      - ALLOW_PLAINTEXT_LISTENER=yes
-      # no zookeeper mode
-      - KAFKA_ENABLE_KRAFT=yes
-      - KAFKA_CFG_PROCESS_ROLES=broker,controller
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka-broker-1:9092,2@kafka-broker-2:9092
-      - KAFKA_KRAFT_CLUSTER_ID=tW3LXZglQBWKFipfvZXIdQ
-      # access options
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,BROKER:PLAINTEXT,EXTERNAL:PLAINTEXT
-      - KAFKA_CFG_LISTENERS=BROKER://:9091,CONTROLLER://:9092,EXTERNAL://:9093
-      - KAFKA_CFG_ADVERTISED_LISTENERS=BROKER://kafka-broker-2:9091,EXTERNAL://localhost:9094
-      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=BROKER
-      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      # partitions + replication
-      - KAFKA_CFG_NUM_PARTITIONS=2
-      - KAFKA_DEFAULT_REPLICATION_FACTOR=2
-      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
-
-  db:
-    container_name: db
+  lib-db:
     image: postgres:14.2
     ports:
       - "5432:5432"

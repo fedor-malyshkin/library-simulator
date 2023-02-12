@@ -2,168 +2,142 @@ package service
 
 import (
 	"context"
-	"errors"
 	"github.com/fedor-malyshkin/library-simulator/book-catalogue/pkg/book_catalogue"
 	"github.com/fedor-malyshkin/library-simulator/book-catalogue/pkg/book_catalogue/config"
 	"github.com/fedor-malyshkin/library-simulator/common/pkg/svclog"
 	"github.com/hashicorp/go-multierror"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
-	"github.com/segmentio/kafka-go"
 	"time"
 )
 
-type KafkaMsg struct {
-	Key   string
-	Value string
-}
-type KafkaEnquiryConsumer struct {
-	appCtx *book_catalogue.AppContext
-	log    zerolog.Logger
-	reqCh  chan<- KafkaMsg
-	reader *kafka.Reader
+type RabbitMsg struct {
+	Value  string
+	OrgMsg amqp.Delivery
 }
 
-type KafkaEnquiryProducer struct {
-	appCtx *book_catalogue.AppContext
-	log    zerolog.Logger
-	respCh <-chan KafkaMsg
-	writer *kafka.Writer
+type RabbitEnquiryProcessor struct {
+	appCtx  *book_catalogue.AppContext
+	log     zerolog.Logger
+	reqCh   chan<- RabbitMsg
+	respCh  <-chan RabbitMsg
+	rbConn  *amqp.Connection
+	rbCh    *amqp.Channel
+	rbQueue amqp.Queue
+	rbMsgCh <-chan amqp.Delivery
 }
 
-func NewKafkaEnquiryConsumer(cfg *config.Config,
+func NewRabbitEnquiryProcessor(cfg *config.Config,
 	appCtx *book_catalogue.AppContext,
-	ch chan KafkaMsg) *KafkaEnquiryConsumer {
+	reqCh chan<- RabbitMsg,
+	respCh <-chan RabbitMsg) *RabbitEnquiryProcessor {
 
-	// make a new reader that consumes from topic
-	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  cfg.Kafka.Brokers,
-		GroupID:  "book-catalogue",
-		Topic:    cfg.Kafka.RequestTopic,
-		MinBytes: 1, // https://stackoverflow.com/questions/64656638/using-kafka-go-why-am-i-seeing-what-appears-to-be-batching-reads-writes-is-the
-		MaxBytes: 5 * 1024,
-		Dialer: &kafka.Dialer{
-			Timeout:   10 * time.Second,
-			DualStack: true,
-			ClientID:  "popa",
-		}})
+	log := svclog.Service(appCtx.Logger, "rabbit-processor")
 
-	return &KafkaEnquiryConsumer{
-		appCtx: appCtx,
-		log:    svclog.Service(appCtx.Logger, "kafka-consumer"),
-		reader: r,
-		reqCh:  ch,
-	}
-}
-
-func NewKafkaEnquiryProducer(cfg *config.Config,
-	appCtx *book_catalogue.AppContext,
-	ch chan KafkaMsg) *KafkaEnquiryProducer {
-
-	w := &kafka.Writer{
-		Addr:                   kafka.TCP(cfg.Kafka.Brokers...),
-		Topic:                  cfg.Kafka.ResponseTopic,
-		Balancer:               &kafka.Hash{},
-		AllowAutoTopicCreation: true,
-		BatchTimeout:           2 * time.Millisecond, // https://github.com/segmentio/kafka-go/issues/326
-	}
-
-	return &KafkaEnquiryProducer{
-		appCtx: appCtx,
-		log:    svclog.Service(appCtx.Logger, "kafka-producer"),
-		writer: w,
-		respCh: ch,
-	}
-}
-
-func (c KafkaEnquiryConsumer) MainLoop() error {
-	// TODO: what to do if we have an error during reading from Kafka? - Retry?
-	defer c.closeConsumer()
-	for {
-		select {
-		case <-c.appCtx.Ctx.Done():
-			c.log.Info().Err(c.appCtx.Ctx.Err()).Msg("stop kafka reading loop")
-			return c.appCtx.Ctx.Err()
-		default:
-			_ = c.tryToReadKafka()
-		}
-
-	}
-}
-
-func (c KafkaEnquiryConsumer) tryToReadKafka() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	m, err := c.reader.FetchMessage(ctx)
+	rbConn, err := amqp.Dial("amqp://rmuser:rmpassword@localhost:5672/")
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil
-		} else {
-			c.log.Error().Err(err).Msg("kafka reading error")
-			c.appCtx.Errors = multierror.Append(c.appCtx.Errors, err)
-			c.appCtx.CtxCancelFn()
-			return err
-		}
+		log.Fatal().Err(err).Msg("cannot connect to broker")
 	}
-	c.log.Debug().Msgf("message at topic/partition/offset %v/%v/%v: %s = %s\n", m.Topic, m.Partition, m.Offset, string(m.Key), string(m.Value))
-	c.reqCh <- KafkaMsg{
-		Key:   string(m.Key),
-		Value: string(m.Value),
+	rbCh, err := rbConn.Channel()
+	if err != nil {
+		log.Fatal().Err(err).Msg("cannot open broker channel")
 	}
-	if err := c.reader.CommitMessages(ctx, m); err != nil {
-		c.log.Error().Err(err).Msg("kafka committing error")
-		c.appCtx.Errors = multierror.Append(c.appCtx.Errors, err)
-		c.appCtx.CtxCancelFn()
-		return err
+	rbQueue, err := rbCh.QueueDeclare(
+		"rpc_queue", // name
+		false,       // durable
+		false,       // delete when unused
+		false,       // exclusive
+		false,       // no-wait
+		nil,         // arguments
+	)
+	if err != nil {
+		log.Fatal().Err(err).Msg("cannot declare the queue")
 	}
-	return nil
+	err = rbCh.Qos(
+		1,     // prefetch count
+		0,     // prefetch size
+		false, // global
+	)
+	if err != nil {
+		log.Fatal().Err(err).Msg("cannot set QoS")
+	}
+	rbMsgCh, err := rbCh.Consume(
+		rbQueue.Name, // queue
+		"",           // consumer
+		true,         // auto-ack
+		false,        // exclusive
+		false,        // no-local
+		false,        // no-wait
+		nil,          // args
+	)
+	if err != nil {
+		log.Fatal().Err(err).Msg("cannot start message consumption")
+	}
+
+	return &RabbitEnquiryProcessor{
+		appCtx:  appCtx,
+		log:     svclog.Service(appCtx.Logger, "rabbit-consumer"),
+		reqCh:   reqCh,
+		respCh:  respCh,
+		rbConn:  rbConn,
+		rbCh:    rbCh,
+		rbQueue: rbQueue,
+		rbMsgCh: rbMsgCh,
+	}
 }
 
-func (c KafkaEnquiryConsumer) closeConsumer() {
-	c.log.Info().Msg("closing the reader")
-	if err := c.reader.Close(); err != nil {
-		c.log.Err(err).Msg("failed to close reader")
-	}
-}
-
-func (p KafkaEnquiryProducer) MainLoop() error {
-	// TODO: what to do if we have an error during writing into Kafka? - Retry?
-	defer p.closeProducer()
+func (p RabbitEnquiryProcessor) MainRequestLoop() error {
+	// TODO: what to do if we have an error during reading from Kafka? - Retry?
+	defer p.closeConsumer()
 	for {
 		select {
 		case <-p.appCtx.Ctx.Done():
-			p.log.Info().Err(p.appCtx.Ctx.Err()).Msg("stop kafka writing loop")
+			p.log.Info().Err(p.appCtx.Ctx.Err()).Msg("stop rabbit reading loop")
+			return p.appCtx.Ctx.Err()
+		case msg, ok := <-p.rbMsgCh:
+			if !ok {
+				p.log.Info().Msg("rabbit request chanel is closed")
+				p.appCtx.CtxCancelFn()
+				return nil
+			}
+			p.reqCh <- RabbitMsg{OrgMsg: msg,
+				Value: string(msg.Body)}
+		}
+	}
+}
+
+func (p RabbitEnquiryProcessor) closeConsumer() {
+	p.log.Info().Msg("Closing the reader")
+	p.rbCh.Close()
+	p.rbConn.Close()
+}
+
+func (p RabbitEnquiryProcessor) MainResponseLoop() error {
+	// TODO: what to do if we have an error during writing into Kafka? - Retry?
+	for {
+		select {
+		case <-p.appCtx.Ctx.Done():
+			p.log.Info().Err(p.appCtx.Ctx.Err()).Msg("stop rabbit writing loop")
 			return p.appCtx.Ctx.Err()
 		case msg := <-p.respCh:
-			err := p.writeToKafka(msg)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := p.rbCh.PublishWithContext(ctx,
+				"",                 // exchange
+				msg.OrgMsg.ReplyTo, // routing key
+				false,              // mandatory
+				false,              // immediate
+				amqp.Publishing{
+					ContentType:   "text/plain",
+					CorrelationId: msg.OrgMsg.CorrelationId,
+					Body:          []byte(msg.Value),
+				})
+			cancel()
 			if err != nil {
-				p.log.Error().Err(err).Msg("kafka writing error")
+				p.log.Error().Err(err).Msg("rabbit writing resp error")
 				p.appCtx.Errors = multierror.Append(p.appCtx.Errors, err)
 				p.appCtx.CtxCancelFn()
 				return err
 			}
 		}
-	}
-}
-
-func (p KafkaEnquiryProducer) writeToKafka(msg KafkaMsg) error {
-	//------
-	start := time.Now()
-	//------
-	err := p.writer.WriteMessages(context.Background(),
-		kafka.Message{
-			Key:   []byte(msg.Key),
-			Value: []byte(msg.Value),
-		})
-	// ----------
-	elapsed := time.Now().Sub(start)
-	p.log.Debug().Dur("writing into kafka duration (ms)", elapsed).Msg("end writing")
-	//-----------
-	return err
-}
-
-func (p KafkaEnquiryProducer) closeProducer() {
-	p.log.Info().Msg("closing the writer")
-	if err := p.writer.Close(); err != nil {
-		p.log.Err(err).Msg("failed to close writer")
 	}
 }
