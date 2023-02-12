@@ -35,16 +35,15 @@ func NewApp(cfg *config.Config) (*App, error) {
 
 	appCtx := receptionist.NewAppContext(svclog.NewLogger(), ctx, cancel)
 
-	kafkaRespCh := make(chan service.KafkaMsg, 100)
-	kafkaCancelReqCh := make(chan service.EnquiryID, 100)
-	kafkaReqCh := make(chan service.KafkaMsg, 100)
+	rabbitRespCh := make(chan service.RabbitMsg, 100)
+	rabbitCancelReqCh := make(chan service.EnquiryID, 100)
+	rabbitReqCh := make(chan service.RabbitMsg, 100)
 
-	enquiryHandler := service.NewEnquiryHandler(cfg, appCtx, kafkaReqCh, kafkaCancelReqCh, kafkaRespCh)
+	enquiryHandler := service.NewEnquiryHandler(cfg, appCtx, rabbitReqCh, rabbitCancelReqCh, rabbitRespCh)
 	appCtx.ErrGroup.Go(enquiryHandler.MainLoop)
-	kafkaEnquiryProducer := service.NewKafkaEnquiryProducer(cfg, appCtx, kafkaReqCh)
-	appCtx.ErrGroup.Go(kafkaEnquiryProducer.MainLoop)
-	kafkaEnquiryConsumer := service.NewKafkaEnquiryConsumer(cfg, appCtx, kafkaRespCh)
-	appCtx.ErrGroup.Go(kafkaEnquiryConsumer.MainLoop)
+	rabbitEnquiryProcessor := service.NewRabbitEnquiryProcessor(cfg, appCtx, rabbitReqCh, rabbitRespCh)
+	appCtx.ErrGroup.Go(rabbitEnquiryProcessor.MainRequestLoop)
+	appCtx.ErrGroup.Go(rabbitEnquiryProcessor.MainResponseLoop)
 
 	ep, err := rest.NewMainEndpoint(cfg, appCtx, enquiryHandler)
 	if err != nil {
