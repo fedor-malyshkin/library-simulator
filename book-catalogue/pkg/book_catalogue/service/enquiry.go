@@ -15,24 +15,24 @@ import (
 )
 
 type EnquiryHandler struct {
-	appCtx      *book_catalogue.AppContext
-	cfg         *config.Config
-	log         zerolog.Logger
-	kafkaReqCh  <-chan KafkaMsg
-	kafkaRespCh chan<- KafkaMsg
+	appCtx       *book_catalogue.AppContext
+	cfg          *config.Config
+	log          zerolog.Logger
+	rabbitReqCh  <-chan RabbitMsg
+	rabbitRespCh chan<- RabbitMsg
 }
 
 func NewEnquiryHandler(cfg *config.Config,
 	appCtx *book_catalogue.AppContext,
-	kafkaReqCh <-chan KafkaMsg,
-	kafkaRespCh chan<- KafkaMsg) *EnquiryHandler {
+	rabbitReqCh <-chan RabbitMsg,
+	rabbitRespCh chan<- RabbitMsg) *EnquiryHandler {
 
 	return &EnquiryHandler{
-		appCtx:      appCtx,
-		cfg:         cfg,
-		log:         svclog.Service(appCtx.Logger, "enquiry-handler"),
-		kafkaRespCh: kafkaRespCh,
-		kafkaReqCh:  kafkaReqCh,
+		appCtx:       appCtx,
+		cfg:          cfg,
+		log:          svclog.Service(appCtx.Logger, "enquiry-handler"),
+		rabbitRespCh: rabbitRespCh,
+		rabbitReqCh:  rabbitReqCh,
 	}
 }
 
@@ -42,7 +42,7 @@ func (h EnquiryHandler) MainLoop() error {
 		case <-h.appCtx.Ctx.Done():
 			h.log.Info().Err(h.appCtx.Ctx.Err()).Msg("stop enquiry processing loop")
 			return h.appCtx.Ctx.Err()
-		case enq := <-h.kafkaReqCh:
+		case enq := <-h.rabbitReqCh:
 			var resp string
 			if len(enq.Value) < 20 {
 				var err error
@@ -50,17 +50,17 @@ func (h EnquiryHandler) MainLoop() error {
 				resp, err = h.askBookArchive(ctx, enq.Value)
 				cancel()
 				if err != nil {
-					h.log.Err(err).Msg("asking book-archive")
+					h.log.Warn().Err(err).Msg("asking book-archive")
 					continue
 				}
 
 			} else {
 				resp = strings.Replace(enq.Value, "a", "z", -1)
 			}
-			h.log.Info().Msgf("<%s> -> <%s>", enq.Value, resp)
-			h.kafkaRespCh <- KafkaMsg{
-				Key:   enq.Key,
-				Value: resp,
+			// h.log.Info().Msgf("<%s> -> <%s>", enq.Value, resp)
+			h.rabbitRespCh <- RabbitMsg{
+				OrgMsg: enq.OrgMsg,
+				Value:  resp,
 			}
 		}
 	}

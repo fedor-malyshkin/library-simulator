@@ -31,28 +31,28 @@ type EnquiryResp struct {
 }
 
 type EnquiryHandler struct {
-	appCtx           *receptionist.AppContext
-	log              zerolog.Logger
-	reqMap           map[EnquiryID]chan<- EnquiryResp
-	enqReqCh         chan EnquiryReq
-	kafkaReqCh       chan<- KafkaMsg
-	kafkaCancelReqCh chan EnquiryID
-	kafkaRespCh      <-chan KafkaMsg
+	appCtx            *receptionist.AppContext
+	log               zerolog.Logger
+	reqMap            map[EnquiryID]chan<- EnquiryResp
+	enqReqCh          chan EnquiryReq
+	rabbitReqCh       chan<- RabbitMsg
+	rabbitCancelReqCh chan EnquiryID
+	rabbitRespCh      <-chan RabbitMsg
 }
 
 func NewEnquiryHandler(cfg *config.Config,
 	appCtx *receptionist.AppContext,
-	kafkaReqCh chan KafkaMsg,
-	kafkaCancelReqCh chan EnquiryID,
-	kafkaRespCh chan KafkaMsg) *EnquiryHandler {
+	rabbitReqCh chan RabbitMsg,
+	rabbitCancelReqCh chan EnquiryID,
+	rabbitRespCh chan RabbitMsg) *EnquiryHandler {
 	return &EnquiryHandler{
-		appCtx:           appCtx,
-		log:              svclog.Service(appCtx.Logger, "enquiry-handler"),
-		reqMap:           make(map[EnquiryID]chan<- EnquiryResp, 100),
-		enqReqCh:         make(chan EnquiryReq, 100),
-		kafkaRespCh:      kafkaRespCh,
-		kafkaCancelReqCh: kafkaCancelReqCh,
-		kafkaReqCh:       kafkaReqCh,
+		appCtx:            appCtx,
+		log:               svclog.Service(appCtx.Logger, "enquiry-handler"),
+		reqMap:            make(map[EnquiryID]chan<- EnquiryResp, 100),
+		enqReqCh:          make(chan EnquiryReq, 100),
+		rabbitRespCh:      rabbitRespCh,
+		rabbitCancelReqCh: rabbitCancelReqCh,
+		rabbitReqCh:       rabbitReqCh,
 	}
 }
 
@@ -73,8 +73,8 @@ func (h EnquiryHandler) ProcessEnquiry(ctx context.Context, request *http.Reques
 
 	select {
 	case <-ctx.Done():
-		h.kafkaCancelReqCh <- enqID
-		h.log.Warn().Str("EnquiryID", enqID.Str()).Msg("kafka response timeout")
+		h.rabbitCancelReqCh <- enqID
+		h.log.Warn().Str("EnquiryID", enqID.Str()).Msg("rabbit response timeout")
 		return http.StatusRequestTimeout, ""
 	case resp := <-respCh:
 		close(respCh)
@@ -97,7 +97,7 @@ func (h EnquiryHandler) MainLoop() error {
 		case <-h.appCtx.Ctx.Done():
 			h.log.Info().Err(h.appCtx.Ctx.Err()).Msg("stop request processing loop")
 			return h.appCtx.Ctx.Err()
-		case enqID := <-h.kafkaCancelReqCh:
+		case enqID := <-h.rabbitCancelReqCh:
 			if ch, ok := h.reqMap[enqID]; ok {
 				close(ch)
 			}
@@ -105,16 +105,16 @@ func (h EnquiryHandler) MainLoop() error {
 		case enqReq := <-h.enqReqCh:
 			h.reqMap[enqReq.id] = enqReq.respCh
 			h.log.Info().Str("EnquiryID", enqReq.id.Str()).Msg("put ID into map")
-			h.kafkaReqCh <- KafkaMsg{
+			h.rabbitReqCh <- RabbitMsg{
 				Key:   enqReq.id.Str(),
 				Value: enqReq.request,
 			}
-		case kfkResp := <-h.kafkaRespCh:
-			enqID := EnquiryID(kfkResp.Key)
+		case rbResp := <-h.rabbitRespCh:
+			enqID := EnquiryID(rbResp.Key)
 			if ch, ok := h.reqMap[enqID]; ok {
 				ch <- EnquiryResp{
 					id:       enqID,
-					response: kfkResp.Value,
+					response: rbResp.Value,
 				}
 				delete(h.reqMap, enqID)
 			} else {
